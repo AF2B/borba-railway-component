@@ -1,64 +1,56 @@
 (ns borba.railway.http
-  "HTTP response helpers for Railway-oriented handlers.
+  "Turns an Either into an HTTP response map, so that a handler built from
+   railway steps ends with one call:
 
-   Converts Railway Either values (Right/Left) into Pedestal-compatible
-   HTTP response maps.
+     (defn create-user [{:keys [components body-params]}]
+       (rh/railway->response (users/create! components body-params)
+                             :status 201))
 
-   ── Default error → HTTP status mapping ──────────────────────────────────────
+   A success becomes {:status <status> :body <value>}; a failure becomes
+   {:status <status of its :error> :body <the error map>}."
+  (:require
+   [borba.railway :as railway]))
 
-     :not-found           → 404
-     :validation-failed   → 422
-     :conflict            → 409
-     :unauthorized        → 401
-     :forbidden           → 403
-     :unsupported-media-type → 415
-     (any other error)    → 400
+(def default-error-statuses
+  "The HTTP status of the :error keywords the library names. A keyword that is
+   not here maps to 400, and a caller adds or overrides entries through the
+   :error->status option of `railway->response`."
+  {:not-found              404
+   :validation-failed      422
+   :conflict               409
+   :unauthorized           401
+   :forbidden              403
+   :unsupported-media-type 415
+   :exception              500})
 
-   ── Usage ────────────────────────────────────────────────────────────────────
+(def ^:private default-success-status 200)
+(def ^:private fallback-error-status 400)
 
-     (require '[borba.railway.http :as rh])
+(defn- status-resolver
+  "Returns the function that maps a failure to its HTTP status.
+   - error->status: nil for the defaults, a map of :error keyword to status
+     that is merged over the defaults, or a function from the error map to a
+     status that replaces them"
+  [error->status]
+  (cond
+    (fn? error->status)
+    error->status
 
-     ;; Simple — success defaults to 200
-     (defn get-handler [{:keys [components path-params]}]
-       (rh/railway->response (biz/get-by-id components (:id path-params))))
-
-     ;; Custom success status
-     (defn create-handler [{:keys [components body-params]}]
-       (rh/railway->response (biz/create! components body-params) :status 201))
-
-     ;; Custom error mapping (overrides default)
-     (defn handler [{:keys [components body-params]}]
-       (rh/railway->response
-         (biz/do-something components body-params)
-         :status 202
-         :error->status (fn [{:keys [error]}]
-                          (case error
-                            :rate-limited 429
-                            400))))"
-  (:require [borba.railway :as rop]))
-
-(defn- default-error->status [{:keys [error]}]
-  (case error
-    :not-found              404
-    :validation-failed      422
-    :conflict               409
-    :unauthorized           401
-    :forbidden              403
-    :unsupported-media-type 415
-    400))
+    :else
+    (let [statuses (merge default-error-statuses error->status)]
+      (fn [error]
+        (get statuses (:error error) fallback-error-status)))))
 
 (defn railway->response
-  "Converts a Railway Either value into an HTTP response map.
-
-   On Right (success): {:status <status> :body <value>}
-   On Left  (error):   {:status <http-status> :body <error-map>}
-
-   Options:
-     :status        — HTTP status for success (default 200)
-     :error->status — fn from error map to HTTP status (default: common mapping)"
+  "Converts a success or a failure into an HTTP response map.
+   - result: a success or a failure from borba.railway
+   - status: the HTTP status of a success (default 200)
+   - error->status: how a failure maps to a status; nil for the defaults, a
+     map of :error keyword to status merged over them, or a function from the
+     error map to a status"
   [result & {:keys [status error->status]
-             :or   {status       200
-                    error->status default-error->status}}]
-  (rop/either result
-              (fn [err] {:status (error->status err) :body err})
-              (fn [val] {:status status :body val})))
+             :or   {status default-success-status}}]
+  (let [resolve-status (status-resolver error->status)]
+    (railway/either result
+                    (fn [error] {:status (resolve-status error) :body error})
+                    (fn [value] {:status status :body value}))))
