@@ -1,0 +1,7 @@
+;; The tasks of the Borba standard live in borba-tooling. This file pins the
+;; version this repository follows (v0.1.1); bump it with
+;; `bb -x borba.tooling.stamp/run` from a clone of borba-tooling.
+{:deps
+ {io.github.af2b/borba-tooling
+  {:git/url "https://github.com/AF2B/borba-tooling"
+   :git/sha "8eb43137340d48b038f0684492849470a4ecfa4f"}}}
